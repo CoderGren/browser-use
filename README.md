@@ -180,6 +180,30 @@ browser-use close                       # Close browser
 
 The CLI keeps the browser running between commands for fast iteration. See [CLI docs](browser_use/skill_cli/README.md) for all commands.
 
+### MCP Server
+
+Browser Use can also run as a local Model Context Protocol (MCP) server for AI clients that support MCP tools.
+This exposes direct browser-control tools like navigation, clicking, typing, screenshots, page state, tabs, and session cleanup.
+
+```bash
+uvx --from 'browser-use[cli]' browser-use --mcp
+```
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "browser-use": {
+      "command": "uvx",
+      "args": ["--from", "browser-use[cli]", "browser-use", "--mcp"]
+    }
+  }
+}
+```
+
+The direct browser tools do not require a separate LLM API key. Set an LLM API key only if you want to use agent fallback or AI-powered extraction tools.
+
 ### Claude Code Skill
 
 For [Claude Code](https://claude.ai/code), install the skill to enable AI-assisted browser automation:

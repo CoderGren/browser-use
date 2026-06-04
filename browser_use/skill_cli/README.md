@@ -318,6 +318,30 @@ BROWSER_USE_SESSION=work browser-use state
 | `--json` | Output as JSON |
 | `--mcp` | Run as MCP server via stdin/stdout |
 
+## MCP Server
+
+Use `--mcp` to expose Browser Use as a local Model Context Protocol server for MCP-capable AI clients.
+The MCP server provides direct browser-control tools for navigation, clicking, typing, screenshots, page state, tab management, and session cleanup.
+
+```bash
+uvx --from 'browser-use[cli]' browser-use --mcp
+```
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "browser-use": {
+      "command": "uvx",
+      "args": ["--from", "browser-use[cli]", "browser-use", "--mcp"]
+    }
+  }
+}
+```
+
+The direct browser-control tools work without an LLM API key. Configure an LLM API key only when using agent fallback or AI-powered extraction tools.
+
 ## Examples
 
 ### Fill a Form
