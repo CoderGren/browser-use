@@ -905,16 +905,7 @@ class BrowserUseServer:
 
 		# Add interactive elements with their indices
 		for index, element in state.dom_state.selector_map.items():
-			elem_info: dict[str, Any] = {
-				'index': index,
-				'tag': element.tag_name,
-				'text': element.get_all_children_text(max_depth=2)[:100],
-			}
-			if element.attributes.get('placeholder'):
-				elem_info['placeholder'] = element.attributes['placeholder']
-			if element.attributes.get('href'):
-				elem_info['href'] = element.attributes['href']
-			result['interactive_elements'].append(elem_info)
+			result['interactive_elements'].append(self._format_interactive_element(index, element))
 
 		# Return screenshot separately as ImageContent instead of embedding base64 in JSON
 		screenshot_b64 = None
@@ -928,6 +919,192 @@ class BrowserUseServer:
 				}
 
 		return json.dumps(result, indent=2), screenshot_b64
+
+	def _format_interactive_element(self, index: int, element: Any) -> dict[str, Any]:
+		"""Format a DOM element for MCP clients.
+
+		MCP clients rely on this compact JSON to decide which element to click or type into.
+		Include stable labels and form metadata when available so clients do not need to
+		fall back to coordinate clicks as often.
+		"""
+		attributes = getattr(element, 'attributes', {}) or {}
+		text = self._normalize_element_text(element.get_all_children_text(max_depth=2) if hasattr(element, 'get_all_children_text') else '')
+
+		elem_info: dict[str, Any] = {
+			'index': index,
+			'tag': getattr(element, 'tag_name', ''),
+			'text': text[:100],
+		}
+
+		label = self._infer_element_label(element)
+		if label:
+			elem_info['label'] = label[:160]
+
+		for attr_name, output_name in [
+			('type', 'type'),
+			('role', 'role'),
+			('name', 'name'),
+			('id', 'id'),
+			('placeholder', 'placeholder'),
+			('aria-label', 'aria_label'),
+			('title', 'title'),
+			('href', 'href'),
+			('required', 'required'),
+			('aria-expanded', 'expanded'),
+		]:
+			if attributes.get(attr_name):
+				elem_info[output_name] = attributes[attr_name]
+
+		if attributes.get('value') and attributes.get('type') not in {'password', 'hidden'}:
+			elem_info['value'] = attributes['value']
+
+		absolute_position = getattr(element, 'absolute_position', None)
+		if absolute_position:
+			elem_info['bbox'] = {
+				'x': absolute_position.x,
+				'y': absolute_position.y,
+				'width': absolute_position.width,
+				'height': absolute_position.height,
+			}
+
+		return elem_info
+
+	def _infer_element_label(self, element: Any) -> str | None:
+		"""Infer a human-readable label for form controls and custom widgets."""
+		attributes = getattr(element, 'attributes', {}) or {}
+		tag_name = getattr(element, 'tag_name', '')
+
+		for attr_name in ['aria-label', 'title']:
+			label = self._normalize_element_text(attributes.get(attr_name, ''))
+			if label and self._is_descriptive_label(label):
+				return label
+
+		own_text = self._node_text(element)
+		if tag_name not in {'input', 'select', 'textarea'} and own_text:
+			return None
+
+		is_form_like = tag_name in {'input', 'select', 'textarea', 'button'} or attributes.get('role') in {
+			'button',
+			'checkbox',
+			'combobox',
+			'listbox',
+			'menuitem',
+			'option',
+			'radio',
+			'searchbox',
+			'slider',
+			'spinbutton',
+			'switch',
+			'textbox',
+		}
+		if not is_form_like:
+			return None
+
+		root = self._get_root_node(element)
+
+		aria_labelledby = attributes.get('aria-labelledby')
+		if aria_labelledby and root:
+			label_parts = []
+			for label_id in aria_labelledby.split():
+				label_node = self._find_node_by_attribute(root, 'id', label_id)
+				label_text = self._node_text(label_node) if label_node else ''
+				if label_text:
+					label_parts.append(label_text)
+			combined_label = self._normalize_element_text(' '.join(label_parts))
+			if combined_label:
+				return combined_label
+
+		element_id = attributes.get('id')
+		if element_id and root:
+			label_node = self._find_label_for(root, element_id)
+			label = self._node_text(label_node) if label_node else ''
+			if label:
+				return label
+
+		wrapping_label = self._find_ancestor_label(element)
+		label = self._node_text(wrapping_label) if wrapping_label else ''
+		if label:
+			return label
+
+		nearby_label = self._find_nearby_preceding_text(element)
+		if nearby_label:
+			return nearby_label
+
+		for attr_name in ['name', 'id', 'placeholder']:
+			label = self._normalize_element_text(attributes.get(attr_name, ''))
+			if label and self._is_descriptive_label(label):
+				return label
+
+		return None
+
+	def _find_nearby_preceding_text(self, element: Any) -> str | None:
+		"""Find visible text near a control by walking preceding siblings and ancestors."""
+		current = element
+		for _ in range(3):
+			parent = getattr(current, 'parent_node', None)
+			if not parent:
+				return None
+
+			siblings = list(getattr(parent, 'children_nodes', None) or [])
+			if current in siblings:
+				current_index = siblings.index(current)
+				for sibling in reversed(siblings[:current_index]):
+					text = self._node_text(sibling)
+					if text:
+						return text[:160]
+
+			current = parent
+
+		return None
+
+	def _node_text(self, node: Any | None) -> str:
+		if not node or not hasattr(node, 'get_all_children_text'):
+			return ''
+		return self._normalize_element_text(node.get_all_children_text(max_depth=3))
+
+	@staticmethod
+	def _normalize_element_text(text: str | None) -> str:
+		return ' '.join(str(text or '').split())
+
+	@staticmethod
+	def _is_descriptive_label(text: str) -> bool:
+		"""Return whether text is useful as a human-facing label."""
+		return any(char.isalpha() for char in text) or sum(char.isdigit() for char in text) >= 2
+
+	def _get_root_node(self, element: Any) -> Any | None:
+		current = element
+		while getattr(current, 'parent_node', None):
+			current = current.parent_node
+		return current
+
+	def _find_ancestor_label(self, element: Any) -> Any | None:
+		current = getattr(element, 'parent_node', None)
+		while current:
+			if getattr(current, 'tag_name', '') == 'label':
+				return current
+			current = getattr(current, 'parent_node', None)
+		return None
+
+	def _find_label_for(self, root: Any, element_id: str) -> Any | None:
+		for node in self._iter_subtree(root):
+			attributes = getattr(node, 'attributes', {}) or {}
+			if getattr(node, 'tag_name', '') == 'label' and attributes.get('for') == element_id:
+				return node
+		return None
+
+	def _find_node_by_attribute(self, root: Any, attr_name: str, attr_value: str) -> Any | None:
+		for node in self._iter_subtree(root):
+			attributes = getattr(node, 'attributes', {}) or {}
+			if attributes.get(attr_name) == attr_value:
+				return node
+		return None
+
+	def _iter_subtree(self, root: Any):
+		yield root
+		for child in getattr(root, 'children_nodes', None) or []:
+			yield from self._iter_subtree(child)
+		for shadow_root in getattr(root, 'shadow_roots', None) or []:
+			yield from self._iter_subtree(shadow_root)
 
 	async def _get_html(self, selector: str | None = None) -> str:
 		"""Get raw HTML of the page or a specific element."""
