@@ -28,3 +28,7 @@ Add entries in this format:
 ```markdown
 - [Project name](https://github.com/org/project) - One sentence about what it integrates with. Maintained by @github-handle.
 ```
+
+## Local protocol integrations
+
+- [MCP client integration](mcp/README.md) - Run Browser Use as a local MCP server for AI clients that support MCP tools.

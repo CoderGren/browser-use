@@ -203,6 +203,7 @@ Example MCP client configuration:
 ```
 
 The direct browser tools do not require a separate LLM API key. Set an LLM API key only if you want to use agent fallback or AI-powered extraction tools.
+See the [MCP client integration example](examples/integrations/mcp/README.md) for local checkout configuration, validation steps, and safety notes.
 
 ### Claude Code Skill
 
